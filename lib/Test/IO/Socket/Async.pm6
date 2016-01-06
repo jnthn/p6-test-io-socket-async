@@ -1,4 +1,5 @@
 use OO::Monitors;
+no precompilation;
 
 monitor Test::IO::Socket::Async {
     monitor Connection {
