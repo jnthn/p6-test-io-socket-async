@@ -2,22 +2,10 @@ use OO::Monitors;
 no precompilation;
 
 monitor Test::IO::Socket::Async {
-    monitor Connection {
-        has $.host;
-        has $.port;
-        has $.connection-promise = Promise.new;
-        has $!connection-vow = $!connection-promise.vow;
+    role Connection {
         has @!sent;
         has @!waiting-sent-vows;
         has $!received = Supplier.new;
-
-        method accept-connection() {
-            $!connection-vow.keep(self);
-        }
-
-        method deny-connection($exception = "Connection refused") {
-            $!connection-vow.break($exception);
-        }
 
         method print(Str() $s) {
             @!sent.push($s);
@@ -62,11 +50,48 @@ monitor Test::IO::Socket::Async {
         }
     }
 
+    monitor ClientConnection does Connection {
+        has $.host;
+        has $.port;
+        has $.connection-promise = Promise.new;
+        has $!connection-vow = $!connection-promise.vow;
+
+        method accept-connection() {
+            $!connection-vow.keep(self);
+        }
+
+        method deny-connection($exception = "Connection refused") {
+            $!connection-vow.break($exception);
+        }
+    }
+
+    monitor ServerConnection does Connection {
+    }
+
+    class Listener {
+        has $.host;
+        has $.port;
+        has $.is-closed = Promise.new;
+        has $!is-closed-vow = $!is-closed.vow;
+        has $!connection-supplier = Supplier.new;
+        has $.connection-supply = $!connection-supplier
+            .Supply
+            .on-close({ $!is-closed-vow.keep(True) });
+
+        method incoming-connection() {
+            my $conn = ServerConnection.new;
+            $!connection-supplier.emit($conn);
+            $conn
+        }
+    }
+
     has @!waiting-connects;
     has @!waiting-connection-made-vows;
+    has @!waiting-listens;
+    has @!waiting-start-listening-vows;
 
     method connect(Str() $host, Int() $port) {
-        my $conn = Connection.new(:$host, :$port);
+        my $conn = ClientConnection.new(:$host, :$port);
         with @!waiting-connection-made-vows.shift {
             .keep($conn);
         }
@@ -83,6 +108,28 @@ monitor Test::IO::Socket::Async {
         }
         else {
             @!waiting-connection-made-vows.push($p.vow);
+        }
+        $p
+    }
+
+    method listen(Str() $host, Int() $port) {
+        my $listener = Listener.new(:$host, :$port);
+        with @!waiting-start-listening-vows.shift {
+            .keep($listener);
+        }
+        else {
+            @!waiting-listens.push($listener);
+        }
+        $listener.connection-supply
+    }
+
+    method start-listening() {
+        my $p = Promise.new;
+        with @!waiting-listens.shift {
+            $p.keep($_);
+        }
+        else {
+            @!waiting-start-listening-vows.push($p.vow);
         }
         $p
     }
